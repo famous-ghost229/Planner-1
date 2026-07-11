@@ -1285,7 +1285,7 @@ function applyDocLang(){
 }
 
 let state = loadState();
-let ui = { focusPickerTaskId: null, editingProfile: false, pendingCategory: null, selectedPresets: new Set(), backupTextOpen: false, toasts: [], monthlyHistoryOpen: false, shopTab: "themes" };
+let ui = { focusPickerTaskId: null, editingProfile: false, pendingCategory: null, selectedPresets: new Set(), backupTextOpen: false, toasts: [], monthlyHistoryOpen: false, shopTab: "themes", taskDraft: { name:"", hours:"", minutes:"", clock:"" } };
 let pendingLevelUp = null;
 let pendingMonthlyReport = null;
 let pendingWeightPrompt = null;
@@ -1930,6 +1930,7 @@ function addTask(){
   };
   state.builder.tasks.push(task);
   ui.pendingCategory = null;
+  ui.taskDraft = { name:"", hours:"", minutes:"", clock:"" };
   saveState(); render();
 }
 function removeTask(id){
@@ -2077,7 +2078,7 @@ function saveProfileEdit(){
 function resetAll(){
   if (!confirm(t("confirm_reset_all"))) return;
   state = freshState();
-  ui = { focusPickerTaskId:null, editingProfile:false, pendingCategory:null, shopTab:"themes" };
+  ui = { focusPickerTaskId:null, editingProfile:false, pendingCategory:null, shopTab:"themes", taskDraft:{ name:"", hours:"", minutes:"", clock:"" } };
   try { localStorage.removeItem(KEY); } catch(e){}
   render();
 }
@@ -3247,21 +3248,21 @@ function renderBuilderSetup(){
     ${presetPanel}
     <p class="faint center" style="margin:1rem 0;">${t("manual_divider")}</p>
     ${panel(`
-      <input id="task-name" type="text" placeholder="${t("task_name_ph")}" style="margin-bottom:1rem;">
+      <input id="task-name" type="text" placeholder="${t("task_name_ph")}" style="margin-bottom:1rem;" value="${esc(ui.taskDraft.name)}" oninput="ui.taskDraft.name=this.value">
       <p class="faint" style="margin-bottom:.4rem;">${t("category_question")}</p>
       <div class="row" style="margin-bottom:1rem;">
-        <button type="button" class="btn-outline cat-btn" data-cat="STR" onclick="pickCategory('STR')">${statLabel("STR")}</button>
-        <button type="button" class="btn-outline cat-btn" data-cat="INT" onclick="pickCategory('INT')">${statLabel("INT")}</button>
-        <button type="button" class="btn-outline cat-btn" data-cat="VIT" onclick="pickCategory('VIT')">${statLabel("VIT")}</button>
-        <button type="button" class="btn-outline cat-btn" data-cat="DISC" onclick="pickCategory('DISC')">${statLabel("DISC")}</button>
+        <button type="button" class="btn-outline cat-btn${ui.pendingCategory==='STR'?' active':''}" data-cat="STR" onclick="pickCategory('STR')">${statLabel("STR")}</button>
+        <button type="button" class="btn-outline cat-btn${ui.pendingCategory==='INT'?' active':''}" data-cat="INT" onclick="pickCategory('INT')">${statLabel("INT")}</button>
+        <button type="button" class="btn-outline cat-btn${ui.pendingCategory==='VIT'?' active':''}" data-cat="VIT" onclick="pickCategory('VIT')">${statLabel("VIT")}</button>
+        <button type="button" class="btn-outline cat-btn${ui.pendingCategory==='DISC'?' active':''}" data-cat="DISC" onclick="pickCategory('DISC')">${statLabel("DISC")}</button>
       </div>
       <p class="faint" style="margin-bottom:.4rem;">${t("duration_hint")}</p>
       <div class="row" style="margin-bottom:.75rem;">
-        <input id="task-hours" type="number" min="0" placeholder="${t("hour_ph")}">
-        <input id="task-minutes" type="number" min="0" max="59" placeholder="${t("minute_ph")}">
+        <input id="task-hours" type="number" min="0" placeholder="${t("hour_ph")}" value="${esc(ui.taskDraft.hours)}" oninput="ui.taskDraft.hours=this.value">
+        <input id="task-minutes" type="number" min="0" max="59" placeholder="${t("minute_ph")}" value="${esc(ui.taskDraft.minutes)}" oninput="ui.taskDraft.minutes=this.value">
       </div>
       <p class="faint" style="margin-bottom:.4rem;">${t("clock_hint")}</p>
-      <input id="task-clock" type="time" style="margin-bottom:1rem;">
+      <input id="task-clock" type="time" style="margin-bottom:1rem;" value="${esc(ui.taskDraft.clock)}" oninput="ui.taskDraft.clock=this.value">
       <button class="btn btn-primary" onclick="addTask()">${t("add_task_btn")}</button>
     `)}
     ${state.builder.tasks.length ? panel(`<ul class="list">${items}</ul>`, "padding:0;") : ""}
