@@ -291,6 +291,9 @@
 
 <script>
 const KEY = "planner_system_v1";
+// ===== Cloudflare Worker push server config =====
+const PUSH_SERVER_URL = "https://aged-leaf-7c8b.amirmansirbaghri229.workers.dev";
+const VAPID_PUBLIC_KEY = "BF9rGOls3hWRxYLIsyEFOIW7RzhxwlqeoBvp7PS2FKh4cz3X-7PUyMa4bJA6hhCvkAPhplgE-LxFcbFL9ZusGUY";
 const WIDGET_MODE = (function(){ try { return new URLSearchParams(location.search).get("widget")==="1"; } catch(e){ return false; } })();
 let deferredInstallPrompt = null;
 window.addEventListener("beforeinstallprompt", function(e){ e.preventDefault(); deferredInstallPrompt = e; });
@@ -1371,7 +1374,7 @@ function loadState(){
   } catch(e) {}
   return freshState();
 }
-function saveState(){ try { localStorage.setItem(KEY, JSON.stringify(state)); } catch(e) { console.error(e); } }
+function saveState(){ try { localStorage.setItem(KEY, JSON.stringify(state)); schedulePushSync(); } catch(e) { console.error(e); } }
 
 // ---------- CORE HELPERS ----------
 function isTaskDoneSingle(ap, dateStr, taskId){
@@ -1703,10 +1706,18 @@ function notificationsEnabled(){ return notificationsSupported() && Notification
 function requestNotificationPermission(){
   if (!notificationsSupported()) { render(); return; }
   try {
-    Notification.requestPermission().then(()=> render());
+    Notification.requestPermission().then((perm)=> {
+      if (perm === "granted") syncPushSubscription();
+      render();
+    });
   } catch(e){
     // Older Safari uses callback style
-    try { Notification.requestPermission(()=> render()); } catch(e2){}
+    try {
+      Notification.requestPermission((perm)=> {
+        if (perm === "granted") syncPushSubscription();
+        render();
+      });
+    } catch(e2){}
   }
 }
 function playBeep(){
@@ -1787,6 +1798,59 @@ function notifyUser(title, body){
   try { if (navigator.vibrate) navigator.vibrate([180,80,180]); } catch(e) {}
   playBeep();
   pushToast(title, body);
+}
+// ---------- BACKGROUND PUSH (works even when app is closed) ----------
+function getDeviceId(){
+  let id = null;
+  try { id = localStorage.getItem("sp_device_id"); } catch(e){}
+  if (!id){
+    id = "dev_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 10);
+    try { localStorage.setItem("sp_device_id", id); } catch(e){}
+  }
+  return id;
+}
+function urlB64ToUint8Array(base64String){
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const rawData = atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; i++) outputArray[i] = rawData.charCodeAt(i);
+  return outputArray;
+}
+function buildPushTasksPayload(){
+  if (!state.activeProgram || !Array.isArray(state.activeProgram.tasks)) return [];
+  return state.activeProgram.tasks
+    .filter(tk => tk.clockTime)
+    .map(tk => ({ id: tk.id, name: tk.name, time: tk.clockTime }));
+}
+async function syncPushSubscription(){
+  try {
+    if (!("serviceWorker" in navigator) || !("PushManager" in window)) return;
+    if (!notificationsSupported() || Notification.permission !== "granted") return;
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub){
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlB64ToUint8Array(VAPID_PUBLIC_KEY)
+      });
+    }
+    await fetch(PUSH_SERVER_URL + "/subscribe", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        deviceId: getDeviceId(),
+        subscription: sub.toJSON(),
+        tasks: buildPushTasksPayload()
+      })
+    });
+  } catch(e){ console.warn("Push sync failed:", e); }
+}
+let pushSyncTimer = null;
+function schedulePushSync(){
+  if (!notificationsSupported() || Notification.permission !== "granted") return;
+  if (pushSyncTimer) clearTimeout(pushSyncTimer);
+  pushSyncTimer = setTimeout(syncPushSubscription, 1500);
 }
 function checkTaskReminders(){
   if (!state.activeProgram) return;
@@ -3764,7 +3828,11 @@ setInterval(tick, 1000);
 // ===== Service Worker registration (offline + installability) =====
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("./sw.js").catch(err => {
+    navigator.serviceWorker.register("./sw.js").then(() => {
+      if (notificationsSupported() && Notification.permission === "granted") {
+        syncPushSubscription();
+      }
+    }).catch(err => {
       console.warn("Service worker registration failed:", err);
     });
   });
