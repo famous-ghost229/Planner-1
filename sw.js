@@ -3,12 +3,13 @@
 
 // هر وقت تغییری تو اپ دادی و می‌خوای کاربرها نسخه‌ی جدید رو بگیرن،
 // فقط همین عدد رو یکی زیاد کن (مثلاً v2, v3, ...)
-const CACHE_NAME = "system-planner-v2";
+const CACHE_NAME = "system-planner-v3";
 
 // فایل‌هایی که باید برای کارکرد آفلاین کش بشن
 const APP_SHELL = [
   "./",
-  "./index.html"
+  "./index.html",
+  "./style.css"
 ];
 
 // مرحله نصب: فایل‌های اصلی اپ رو کش می‌کنه
