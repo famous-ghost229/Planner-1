@@ -294,6 +294,10 @@ const KEY = "planner_system_v1";
 // ===== Cloudflare Worker push server config =====
 const PUSH_SERVER_URL = "https://aged-leaf-7c8b.amirmansirbaghri229.workers.dev";
 const VAPID_PUBLIC_KEY = "BF9rGOls3hWRxYLIsyEFOIW7RzhxwlqeoBvp7PS2FKh4cz3X-7PUyMa4bJA6hhCvkAPhplgE-LxFcbFL9ZusGUY";
+// ===== Account (email/password) sync config =====
+const AUTH_TOKEN_KEY = "sp_auth_token";
+const AUTH_EMAIL_KEY = "sp_auth_email";
+const AUTH_NAME_KEY = "sp_auth_name";
 const WIDGET_MODE = (function(){ try { return new URLSearchParams(location.search).get("widget")==="1"; } catch(e){ return false; } })();
 let deferredInstallPrompt = null;
 window.addEventListener("beforeinstallprompt", function(e){ e.preventDefault(); deferredInstallPrompt = e; });
@@ -1285,7 +1289,16 @@ function applyDocLang(){
 }
 
 let state = loadState();
-let ui = { focusPickerTaskId: null, editingProfile: false, pendingCategory: null, selectedPresets: new Set(), backupTextOpen: false, toasts: [], monthlyHistoryOpen: false, shopTab: "themes", taskDraft: { name:"", hours:"", minutes:"", clock:"" } };
+let ui = { focusPickerTaskId: null, editingProfile: false, pendingCategory: null, selectedPresets: new Set(), backupTextOpen: false, toasts: [], monthlyHistoryOpen: false, shopTab: "themes", taskDraft: { name:"", hours:"", minutes:"", clock:"" },
+  auth: {
+    loggedIn: !!localStorage.getItem(AUTH_TOKEN_KEY),
+    email: localStorage.getItem(AUTH_EMAIL_KEY) || "",
+    name: localStorage.getItem(AUTH_NAME_KEY) || "",
+    mode: "login",
+    formEmail: "", formName: "", formPassword: "", formPassword2: "",
+    error: "", loading: false
+  }
+};
 let pendingLevelUp = null;
 let pendingMonthlyReport = null;
 let pendingWeightPrompt = null;
@@ -1374,7 +1387,154 @@ function loadState(){
   } catch(e) {}
   return freshState();
 }
-function saveState(){ try { localStorage.setItem(KEY, JSON.stringify(state)); schedulePushSync(); } catch(e) { console.error(e); } }
+function saveState(){ try { localStorage.setItem(KEY, JSON.stringify(state)); schedulePushSync(); scheduleAccountSync(); } catch(e) { console.error(e); } }
+
+// ---------- ACCOUNT (email/password sync) ----------
+let accountSyncTimer = null;
+function scheduleAccountSync(){
+  if (!ui.auth.loggedIn) return;
+  if (accountSyncTimer) clearTimeout(accountSyncTimer);
+  accountSyncTimer = setTimeout(syncStateToServer, 1500);
+}
+async function syncStateToServer(){
+  const token = localStorage.getItem(AUTH_TOKEN_KEY);
+  if (!token) return;
+  try{
+    await fetch(PUSH_SERVER_URL + "/sync-save", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token, state })
+    });
+  }catch(e){ console.warn("Account sync failed:", e); }
+}
+async function fetchStateFromServer(){
+  const token = localStorage.getItem(AUTH_TOKEN_KEY);
+  if (!token) return;
+  try{
+    const res = await fetch(PUSH_SERVER_URL + "/sync-get", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token })
+    });
+    const data = await res.json();
+    if (!data.ok){
+      // سشن نامعتبره، خارج کن
+      doLogout(true);
+      return;
+    }
+    if (data.state){
+      state = data.state;
+      if (!state.lang) state.lang = "fa";
+      if (!state.profile) state.profile = freshState().profile;
+      if (!state.profile.stats) state.profile.stats = {STR:0,INT:0,VIT:0,DISC:0};
+      try { localStorage.setItem(KEY, JSON.stringify(state)); } catch(e){}
+    }
+    ui.auth.name = data.name || ui.auth.name;
+    try { localStorage.setItem(AUTH_NAME_KEY, ui.auth.name); } catch(e){}
+    render();
+  }catch(e){ console.warn("Fetching account state failed:", e); }
+}
+function setAuthMode(mode){ ui.auth.mode = mode; ui.auth.error = ""; render(); }
+async function doSignup(){
+  const email = document.getElementById("auth-email").value.trim();
+  const name = document.getElementById("auth-name").value.trim();
+  const password = document.getElementById("auth-password").value;
+  const password2 = document.getElementById("auth-password2").value;
+  if (!email || !email.includes("@")){ ui.auth.error = "ایمیل معتبر وارد کن"; render(); return; }
+  if (!name){ ui.auth.error = "اسم رو وارد کن"; render(); return; }
+  if (password.length < 4){ ui.auth.error = "رمز باید حداقل ۴ کاراکتر باشه"; render(); return; }
+  if (password !== password2){ ui.auth.error = "تکرار رمز مطابقت نداره"; render(); return; }
+  ui.auth.loading = true; ui.auth.error = ""; render();
+  try{
+    const res = await fetch(PUSH_SERVER_URL + "/signup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, name, password })
+    });
+    const data = await res.json();
+    ui.auth.loading = false;
+    if (!data.ok){
+      ui.auth.error = data.error === "exists" ? "این ایمیل قبلاً ثبت شده، وارد شو" : "خطا در ثبت‌نام";
+      render(); return;
+    }
+    completeLogin(data.token, email, data.name, data.state);
+  }catch(e){
+    ui.auth.loading = false; ui.auth.error = "اتصال به سرور برقرار نشد"; render();
+  }
+}
+async function doLogin(){
+  const email = document.getElementById("auth-email").value.trim();
+  const password = document.getElementById("auth-password").value;
+  if (!email || !password){ ui.auth.error = "ایمیل و رمز رو وارد کن"; render(); return; }
+  ui.auth.loading = true; ui.auth.error = ""; render();
+  try{
+    const res = await fetch(PUSH_SERVER_URL + "/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password })
+    });
+    const data = await res.json();
+    ui.auth.loading = false;
+    if (!data.ok){
+      ui.auth.error = data.error === "not_found" ? "حسابی با این ایمیل پیدا نشد" : "رمز اشتباهه";
+      render(); return;
+    }
+    completeLogin(data.token, email, data.name, data.state);
+  }catch(e){
+    ui.auth.loading = false; ui.auth.error = "اتصال به سرور برقرار نشد"; render();
+  }
+}
+function completeLogin(token, email, name, serverState){
+  localStorage.setItem(AUTH_TOKEN_KEY, token);
+  localStorage.setItem(AUTH_EMAIL_KEY, email);
+  localStorage.setItem(AUTH_NAME_KEY, name || "");
+  ui.auth.loggedIn = true;
+  ui.auth.email = email;
+  ui.auth.name = name || "";
+  ui.auth.formPassword = ""; ui.auth.formPassword2 = "";
+  if (serverState){
+    state = serverState;
+    if (!state.lang) state.lang = "fa";
+    try { localStorage.setItem(KEY, JSON.stringify(state)); } catch(e){}
+  } else {
+    // حساب تازه‌ست، اطلاعات فعلی دستگاه رو به‌عنوان شروع به حساب می‌فرستیم
+    syncStateToServer();
+  }
+  render();
+}
+function doLogout(silent){
+  localStorage.removeItem(AUTH_TOKEN_KEY);
+  localStorage.removeItem(AUTH_EMAIL_KEY);
+  localStorage.removeItem(AUTH_NAME_KEY);
+  ui.auth.loggedIn = false;
+  ui.auth.email = ""; ui.auth.name = "";
+  ui.auth.formEmail = ""; ui.auth.formPassword = ""; ui.auth.formPassword2 = ""; ui.auth.formName = "";
+  if (!silent) { state = freshState(); try { localStorage.setItem(KEY, JSON.stringify(state)); } catch(e){} }
+  render();
+}
+function renderAuthScreen(){
+  const app = document.getElementById("app");
+  if (!app) return;
+  const isLogin = ui.auth.mode === "login";
+  app.innerHTML = `
+    <div style="max-width:420px;margin:3rem auto;padding:1rem;">
+      <h2 style="text-align:center;margin-bottom:1.5rem;">✦ پلنر سیستمی</h2>
+      ${panel(`
+        <div class="row" style="margin-bottom:1rem;">
+          <button class="btn ${isLogin?'btn-primary':'btn-outline'}" style="flex:1;" onclick="setAuthMode('login')">ورود</button>
+          <button class="btn ${!isLogin?'btn-primary':'btn-outline'}" style="flex:1;" onclick="setAuthMode('signup')">ثبت‌نام</button>
+        </div>
+        ${!isLogin ? `<input id="auth-name" type="text" placeholder="اسم" style="margin-bottom:.75rem;" value="${esc(ui.auth.formName)}" oninput="ui.auth.formName=this.value">` : ""}
+        <input id="auth-email" type="email" placeholder="ایمیل" style="margin-bottom:.75rem;" value="${esc(ui.auth.formEmail)}" oninput="ui.auth.formEmail=this.value">
+        <input id="auth-password" type="password" placeholder="رمز عبور" style="margin-bottom:.75rem;" value="${esc(ui.auth.formPassword)}" oninput="ui.auth.formPassword=this.value">
+        ${!isLogin ? `<input id="auth-password2" type="password" placeholder="تکرار رمز عبور" style="margin-bottom:.75rem;" value="${esc(ui.auth.formPassword2)}" oninput="ui.auth.formPassword2=this.value">` : ""}
+        ${ui.auth.error ? `<p style="color:#ff8080;margin-bottom:.75rem;font-size:.85rem;">${esc(ui.auth.error)}</p>` : ""}
+        <button class="btn btn-primary" style="width:100%;" ${ui.auth.loading?"disabled":""} onclick="${isLogin?'doLogin()':'doSignup()'}">${ui.auth.loading ? "در حال ارسال..." : (isLogin ? "ورود" : "ساخت حساب")}</button>
+      `)}
+    </div>
+  `;
+}
+
 
 // ---------- CORE HELPERS ----------
 function isTaskDoneSingle(ap, dateStr, taskId){
@@ -3495,22 +3655,11 @@ function renderProfile(){
       <div class="lang-grid">${langButtons}</div>
     `)}
     ${panel(`
-      <p class="eyebrow" style="margin-bottom:.6rem;">${t("backup_label")}</p>
-      <div class="row">
-        <button class="btn btn-outline" style="width:100%;" onclick="exportData()">${t("export_btn")}</button>
-        <label class="btn btn-outline" for="import-file-input" style="width:100%;text-align:center;display:flex;align-items:center;justify-content:center;">${t("import_btn")}</label>
-      </div>
-      <button class="btn-link" style="margin-top:.6rem;" onclick="toggleBackupText()">${ui.backupTextOpen ? t("close_btn") : t("backup_text_toggle")}</button>
-      ${ui.backupTextOpen ? `
-        <div style="margin-top:.75rem;">
-          <p class="faint" style="margin-bottom:.3rem;">${t("backup_copy_hint")}</p>
-          <textarea id="backup-text-out" readonly rows="4" style="width:100%;background:rgba(255,255,255,0.04);border:1px solid rgba(96,165,250,0.3);color:#dbe9ff;font-family:monospace;font-size:.7rem;padding:.5rem;">${esc(JSON.stringify(state))}</textarea>
-          <button class="btn btn-outline" style="width:100%;margin-top:.4rem;" onclick="copyBackupText()">${t("backup_copy_btn")}</button>
-          <p class="faint" style="margin:.75rem 0 .3rem;">${t("backup_paste_hint")}</p>
-          <textarea id="backup-text-in" rows="4" style="width:100%;background:rgba(255,255,255,0.04);border:1px solid rgba(96,165,250,0.3);color:#dbe9ff;font-family:monospace;font-size:.7rem;padding:.5rem;" placeholder="${t("backup_paste_ph")}"></textarea>
-          <button class="btn btn-outline" style="width:100%;margin-top:.4rem;" onclick="importFromTextArea()">${t("backup_import_btn")}</button>
-        </div>
-      ` : ""}
+      <p class="eyebrow" style="margin-bottom:.6rem;">حساب کاربری</p>
+      <p class="faint" style="margin-bottom:.3rem;">وارد شده با:</p>
+      <p style="margin-bottom:.2rem;font-weight:700;">${esc(ui.auth.name)}</p>
+      <p class="faint" style="margin-bottom:1rem;">${esc(ui.auth.email)}</p>
+      <button class="btn btn-outline" style="width:100%;" onclick="doLogout()">خروج از حساب</button>
     `)}
     ${panel(`
       <p class="eyebrow" style="margin-bottom:.4rem;">${t("widget_install_title")}</p>
@@ -3698,6 +3847,10 @@ function renderLevelUpModal(){
 }
 
 function render(){
+  if (!ui.auth.loggedIn){
+    renderAuthScreen();
+    return;
+  }
   processProgress();
   checkFocusCompletion();
   checkPomodoroCompletion();
@@ -3824,6 +3977,7 @@ function setupPWA(){
 
 setupPWA();
 render();
+if (ui.auth.loggedIn) fetchStateFromServer();
 setInterval(tick, 1000);
 
 // ===== Service Worker registration (offline + installability) =====
